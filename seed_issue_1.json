@@ -1,0 +1,11 @@
+{
+  "title": "1. Set up the initial Rails project structure",
+  "description": [
+    "Install Rails gem",
+    "Create a new Rails project",
+    "Initialize Git repository",
+    "Add initial commit with Rails project structure",
+    "Create a .gitignore file with standard Rails exclusions",
+    "Push the repository to GitHub"
+  ]
+}
