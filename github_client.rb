@@ -29,6 +29,14 @@ class GitHubClient
     @client.issue("#{owner}/#{repo}", issue_number)
   end
 
+  def get_issues(repo_full_name, state: 'open')
+    @client.issues(repo_full_name, state: state)
+  end
+
+  def get_approved_issues(repo_full_name, tag = 'approved')
+    @client.issues(repo_full_name, labels: tag)
+  end
+
   private
 
   def fetch_existing_issue_titles(repo_full_name)
