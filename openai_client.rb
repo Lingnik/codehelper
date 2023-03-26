@@ -16,7 +16,7 @@ class OpenAIClient
       response = @client.chat(parameters: {
         model: @model,
         messages: [
-          {role: "system", content: "You are a helpful assistant that translates English descriptions into Ruby code."},
+          {role: "system", content: "You are a helpful assistant that translates English descriptions into concise Ruby code."},
           {role: "user", content: "#{prompt}"}
         ],
         max_tokens: max_tokens,
