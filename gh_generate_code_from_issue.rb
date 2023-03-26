@@ -8,7 +8,7 @@ issue_number = ARGV[2].to_i
 api_key = ENV['GITHUB_API_KEY']
 gh_client = GitHubClient.new(api_key)
 
-model = ENV.fetch('GPT_MODEL', 'text-davinci-003')
+model = ENV.fetch('GPT_MODEL', 'gpt-3.5-turbo')
 openai_api_key = ENV['OPENAI_API_KEY']
 openai_client = OpenAIClient.new(openai_api_key, model)
 
@@ -16,23 +16,34 @@ issue = gh_client.get_issue(your_username, repo_name, issue_number)
 issue_title = issue.title
 issue_description = issue.body
 
-puts "Issue title:\n#{issue_title}"
-puts "Issue description:\n#{issue_description}"
+# Split issue description into list items with hyphens
+list_items = issue_description.split("\n").select { |line| line.start_with?('-') }
 
-# Split issue description into bullets
-bullets = issue_description.split("\n").select { |line| line.start_with?('-') }
+list_items.each_with_index do |item, index|
+  prompt = <<-PROMPT
+Generate a Ruby function to accomplish the following task in a Ruby on Rails project:
 
-bullets.each_with_index do |bullet, index|
-  puts "Bullet:\n#{bullet}"
-  puts "Index:\n#{index}"
+Task: #{item.strip}
 
-  prompt = "Given a Ruby on Rails project: #{issue_title.downcase}\n\nPlease provide a Ruby file containing a function (aptly-named based on the task) necessary to complete this task:\n> #{bullet.strip}\n\nOmit any explanation, only provide the code. Provide adequate comments in the file, including the project name at the top of the file and the task as a comment on the function."
-  
-  puts "Prompt: #{prompt}" # Debugging: print the prompt
+Context:
+- This function is part of a larger Rails project.
+- The project follows standard Rails conventions.
+
+Requirements:
+- The function should be written in Ruby.
+- The function should have a descriptive name based on the task.
+- Include comments to explain the purpose of the function and any assumptions made.
+
+Example Input: (if applicable)
+- ...
+
+Example Output: (if applicable)
+- ...
+
+Please provide the Ruby function to accomplish this task.
+  PROMPT
 
   code = openai_client.generate_code(prompt)
-
-  puts "Generated code: #{code}" # Debugging: print the generated code
 
   File.open("generated_code_#{issue_number}_task_#{index + 1}.rb", 'w') do |file|
     file.puts code
@@ -40,4 +51,3 @@ bullets.each_with_index do |bullet, index|
 
   puts "Generated code for issue ##{issue_number} task #{index + 1} saved to generated_code_#{issue_number}_task_#{index + 1}.rb"
 end
-
