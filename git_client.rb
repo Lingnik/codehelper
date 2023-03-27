@@ -3,7 +3,7 @@ require 'fileutils'
 class GitClient
 
   def clone_repository(username, repo_name)
-    repo_url = "https://github.com/#{username}/#{repo_name}.git"
+    repo_url = "git@github.com:#{username}/#{repo_name}.git"
     local_path = "tmp/#{repo_name}"
   
     FileUtils.rm_rf(local_path) if Dir.exist?(local_path)

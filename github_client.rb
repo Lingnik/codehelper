@@ -6,8 +6,10 @@ class GitHubClient
     @client = Octokit::Client.new(access_token: access_token)
   end
 
+  def get_authenticated_user
+    @client.user
+  end
 
-  # GitHub operations
   def create_repository(repo_name, your_username, private_repo = true)
     @client.create_repository(repo_name, owner: your_username, private: private_repo)
   end
@@ -35,13 +37,35 @@ class GitHubClient
     @client.issues(repo_full_name, state: state)
   end
 
-  def get_approved_issues(repo_full_name, tag = 'approved')
+  def get_approved_issues(repo_full_name, tag = 'approved-for-codehelper')
     @client.issues(repo_full_name, labels: tag)
+  end
+
+  def delete_branch(repo_full_name, branch)
+    @client.delete_branch(repo_full_name, branch)
   end
 
   def create_pull_request(repo_full_name, head_branch, base_branch, title)
     @client.create_pull_request(repo_full_name, base_branch, head_branch, title)
   end
+
+  def create_pull_request_for_issue(repo, issue_number, base, head, retries = 5)
+    begin
+      pull_request = @client.create_pull_request_for_issue(repo, base, head, issue_number)
+      puts "Created pull request #{pull_request.number}"
+    rescue Octokit::UnprocessableEntity => e
+      if retries > 0
+        sleep_time = 2 ** (5 - retries) # 2^(5 - retries) for logarithmic backoff
+        puts "Error creating pull request. Retrying in #{sleep_time} seconds..."
+        sleep(sleep_time)
+        create_pull_request_for_issue(repo, issue_number, base, head, retries - 1)
+      else
+        puts "Failed to create pull request after #{retries} attempts."
+        puts e.message
+      end
+    end
+  end
+
 
   private
 
