@@ -17,12 +17,12 @@ def get_project_files_and_contents(path)
 end
 
 # Summarize the reasons for a collection of file changes as a git commit.
-def summarize_reasoning_to_commit(reasonings, openai_client)
+def summarize_reasoning_to_commit(reasonings, openai_client, issue_number)
   messages = [
     {
       role: "system",
       content: <<-PROMPT
-You are an AI language model that takes an array of file change explanations and generates a summary in the form of a commit message in the format of a ≤50-character title, a blank line, and a summary in bulleted form. Your response should be concise and informative.
+You are an AI language model that takes an array of file change explanations and generates a summary in the form of a commit message in the format of a ≤50-character title, a blank line, a summary in bulleted form, a blank line, and the message "Fixes ##{issue_number}". Your response should be concise and informative.
       PROMPT
     },
     {
@@ -170,7 +170,7 @@ Here is the current code structure:
 
   puts "Generated code for issue ##{issue_number}"
 
-  commit_summary = summarize_reasoning_to_commit(reasonings, openai_client)
+  commit_summary = summarize_reasoning_to_commit(reasonings, openai_client, issue_number)
   commit_summary_file_path = File.join(local_repo_path, "commit_summary.txt")
   File.write(commit_summary_file_path, commit_summary)
   puts "Commit summary saved to: #{commit_summary_file_path}"

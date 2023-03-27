@@ -27,7 +27,7 @@ def auto_generate_code(github_api_key, your_username, repo_name)
       commit_summary_file_path = generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
       gh_client.delete_branch(full_repo_name, branch_name)
       git_client.commit_and_push(local_repo_path, issue_number, commit_message_file_path)
-      gh_client.create_pull_request_for_issue(full_repo_name, issue_number, "main", branch_name)
+      gh_client.create_pull_request(full_repo_name, "main", branch_name, issue.title)
     end
   end
 end
