@@ -16,6 +16,26 @@ def get_project_files_and_contents(path)
   files_and_contents
 end
 
+# Summarize the reasons for a collection of file changes as a git commit.
+def summarize_reasoning_to_commit(reasonings, openai_client)
+  messages = [
+    {
+      role: "system",
+      content: <<-PROMPT
+You are an AI language model that takes an array of file change explanations and generates a summary in the form of a commit message in the format of a ≤50-character title, a blank line, and a summary in bulleted form. Your response should be concise and informative.
+      PROMPT
+    },
+    {
+      role: "user",
+      content: "Generate a summary commit message for the following file change explanations:\n\n#{reasonings.join("\n\n")}"
+    }
+  ]
+
+  summary_response = openai_client.generate_response(messages)
+  summary = summary_response.strip
+  return summary
+end
+
 def generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
   api_key = ENV['GITHUB_API_KEY']
   gh_client = GitHubClient.new(api_key)
@@ -128,16 +148,33 @@ Here is the current code structure:
     }
   ]
 
-  response = openai_client.generate_code(messages)
+  response = openai_client.generate_response(messages)
   generated_code_info = JSON.parse(response)
 
-  # TODO: Process the generated code information according to the format in the prompt
-  #       * Iterate through each file
-  #       * Apply the action (create or modify) to the specified file
+  # Process the generated code information according to the format in the prompt
+  git_client = GitClient.new
+  reasonings = []
+  
+  generated_code_info['files'].each do |file_info|
+    file_name = file_info['file_name']
+    action = file_info['action']
+    code = file_info['code']
+    reasoning = file_info['reasoning']
 
-  # TODO: Generate a summary git commit message based on the reasoning returned by gpt conforming to the `reasoning` format
+    file_path = File.join(local_repo_path, file_name)
+
+    File.write(file_path, code)
+
+    reasonings << reasoning
+  end
 
   puts "Generated code for issue ##{issue_number}"
+
+  commit_summary = summarize_reasoning_to_commit(reasonings, openai_client)
+  commit_summary_file_path = File.join(local_repo_path, "commit_summary.txt")
+  File.write(commit_summary_file_path, commit_summary)
+  puts "Commit summary saved to: #{commit_summary_file_path}"
+
 end
 
 if __FILE__ == $0
