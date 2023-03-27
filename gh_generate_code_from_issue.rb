@@ -1,7 +1,7 @@
 require_relative 'github_client'
 require_relative 'openai_client'
 
-def generate_code_from_issue(your_username, repo_name, issue_number)
+def generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
   api_key = ENV['GITHUB_API_KEY']
   gh_client = GitHubClient.new(api_key)
 
@@ -41,14 +41,14 @@ def generate_code_from_issue(your_username, repo_name, issue_number)
     PROMPT
   
     code = openai_client.generate_code(prompt)
-  
-    File.open("generated_code_#{issue_number}_task_#{index + 1}.rb", 'w') do |file|
+
+    file_path = File.join(local_repo_path, "generated_code_#{issue_number}_task_#{index + 1}.rb")
+    File.open(file_path, 'w') do |file|
       file.puts code
     end
 
-  puts "Generated code for issue ##{issue_number} task #{index + 1} saved to generated_code_#{issue_number}_task_#{index + 1}.rb"
+    puts "Generated code for issue ##{issue_number} task #{index + 1} saved to #{file_path}"
   end
-
 end
 
 if __FILE__ == $0
