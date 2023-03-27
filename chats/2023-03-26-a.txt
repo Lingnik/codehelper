@@ -1,0 +1,1624 @@
+
+
+
+  
+  
+Chat GPT: GitHub auto-code generation.
+  
+
+
+
+
+Model: GPT-4
+
+
+
+
+
+I'm working on a ruby project that fetches GitHub issues, figures out which ones are approved to work on, uses the GPT API to write the code, and pushes it up to GitHub as a Pull Request. The last step is the piece that remains, I think. Can you review my code and suggest how I should approach this problem next?
+
+# File: gh_auto_code_generation.rb
+require_relative 'github_client'
+require_relative 'gh_generate_code_from_issue'
+require_relative 'openai_client'
+
+your_username = ARGV[0]
+repo_name = ARGV[1]
+
+api_key = ENV['GITHUB_API_KEY']
+gh_client = GitHubClient.new(api_key)
+
+def generate_script_file(issue_title, file_paths)
+  script_file_name = issue_title.split.join("_").downcase + "_script.rb"
+  code = file_paths.map { |path| File.read(path) }.join("\n")
+  prompt = &lt;&lt;-PROMPT
+#{code}
+
+Please provide a script to run all the functions in the correct order to complete the '#{issue_title}' task.
+  PROMPT
+
+  script = @openai_client.generate_code(prompt, max_tokens = 2048, n = 1, stop = "\n", temperature = 0.5, max_attempts = 5)
+
+  File.write(script_file_name, script)
+  puts "Generated script file '#{script_file_name}'"
+end
+
+def auto_generate_code(api_key, your_username, repo_name, issue_number)
+  approved_issues = gh_client.get_approved_issues("#{your_username}/#{repo_name}")
+  
+  approved_issues.each do |issue|
+    issue_number = issue[:number]
+    puts "Generating code for approved issue ##{issue_number}..."
+    generate_code_from_issue(your_username, repo_name, issue_number)
+  end
+end
+
+
+# File: gh_create_issues.rb
+require_relative 'github_client'
+require 'json'
+require 'optparse'
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: gh_create_issues.rb [options]"
+
+  opts.on('-u', '--username USERNAME', 'Your GitHub username') do |username|
+    options[:username] = username
+  end
+
+  opts.on('-r', '--repo-name REPO_NAME', 'The name of the repository to create issues in') do |repo_name|
+    options[:repo_name] = repo_name
+  end
+end.parse!
+
+# Initialize the GitHub client
+github_client = GitHubClient.new
+
+# Repository's full name
+repo_full_name = "#{options[:username]}/#{options[:repo_name]}"
+
+# Read the list of issues from the 'seed_issues.json' file in the same directory
+file_path = File.join(__dir__, 'seed_issues.json')
+issue_titles = JSON.parse(File.read(file_path))
+
+# Create GitHub issues for each title in the JSON data
+github_client.create_issues(repo_full_name, issue_titles)
+
+puts "Created #{issue_titles.length} issues in the '#{repo_full_name}' repository."
+
+
+# File: gh_create_repo.rb
+require_relative 'github_client'
+require 'optparse'
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: gh_create_repo.rb [options]"
+
+  opts.on('-u', '--username USERNAME', 'Your GitHub username') do |username|
+    options[:username] = username
+  end
+
+  opts.on('-r', '--repo-name REPO_NAME', 'The name of the repository to create') do |repo_name|
+    options[:repo_name] = repo_name
+  end
+end.parse!
+
+# Initialize the GitHub client
+github_client = GitHubClient.new
+
+# Create a new private GitHub repository
+repo = github_client.create_repository(options[:repo_name], options[:username])
+
+puts "Created private repository '#{options[:repo_name]}'."
+
+
+# File: gh_generate_code_from_issue.rb
+require_relative 'github_client'
+require_relative 'openai_client'
+
+def generate_code_from_issue(your_username, repo_name, issue_number)
+  api_key = ENV['GITHUB_API_KEY']
+  gh_client = GitHubClient.new(api_key)
+
+  model = ENV.fetch('GPT_MODEL', 'gpt-3.5-turbo')
+  openai_api_key = ENV['OPENAI_API_KEY']
+  openai_client = OpenAIClient.new(openai_api_key, model)
+
+  issue = gh_client.get_issue(your_username, repo_name, issue_number)
+  issue_title = issue.title
+  issue_description = issue.body
+
+  # Split issue description into list items with hyphens
+  list_items = issue_description.split("\n").select { |line| line.start_with?('-') }
+  
+  list_items.each_with_index do |item, index|
+    prompt = &lt;&lt;-PROMPT
+  Generate a Ruby function to accomplish the following task in a Ruby on Rails project:
+  
+  Task: #{item.strip}
+  
+  Context:
+  - This function is part of a larger Rails project.
+  - The project follows standard Rails conventions.
+  
+  Requirements:
+  - The function should be written in Ruby.
+  - The function should have a descriptive name based on the task.
+  - Include comments to explain the purpose of the function and any assumptions made.
+  
+  Example Input: (if applicable)
+  - ...
+  
+  Example Output: (if applicable)
+  - ...
+  
+  Please provide the Ruby function to accomplish this task.
+    PROMPT
+  
+    code = openai_client.generate_code(prompt)
+  
+    File.open("generated_code_#{issue_number}_task_#{index + 1}.rb", 'w') do |file|
+      file.puts code
+    end
+
+  puts "Generated code for issue ##{issue_number} task #{index + 1} saved to generated_code_#{issue_number}_task_#{index + 1}.rb"
+  end
+
+end
+
+if __FILE__ == $0
+  your_username = ARGV[0]
+  repo_name = ARGV[1]
+  issue_number = ARGV[2].to_i
+  generate_code_from_issue(your_username, repo_name, issue_number)
+end
+
+
+# File: gh_update_issue.rb
+# gh_update_issue.rb
+
+require_relative 'github_client'
+require 'json'
+
+if ARGV.length &lt; 3
+  puts "Usage: ruby gh_update_issue.rb &lt;repo_name&gt; &lt;your_username&gt; &lt;issue_number&gt;"
+  exit(1)
+end
+
+repo_name = ARGV[0]
+your_username = ARGV[1]
+issue_number = ARGV[2].to_i
+repo_full_name = "#{your_username}/#{repo_name}"
+
+github_client = GitHubClient.new
+
+json_file_path = 'seed_issue_1.json'
+data = JSON.parse(File.read(json_file_path))
+
+title = data['title']
+description = data['description'].map { |step| "- #{step}" }.join("\n")
+
+github_client.update_issue(repo_full_name, issue_number, title, description)
+puts "Issue ##{issue_number} has been updated."
+
+
+# File: github_client.rb
+require 'octokit'
+require 'json'
+
+class GitHubClient
+  def initialize(access_token)
+    @client = Octokit::Client.new(access_token: access_token)
+  end
+
+  def create_repository(repo_name, your_username, private_repo = true)
+    @client.create_repository(repo_name, owner: your_username, private: private_repo)
+  end
+
+  def create_issues(repo_full_name, issue_titles)
+    existing_issues = fetch_existing_issue_titles(repo_full_name)
+
+    issue_titles.each_with_index do |title, index|
+      next if existing_issues.include?(title)
+      
+      create_issue_with_retry(repo_full_name, title)
+      puts "Created issue ##{index + 1}: '#{title}'."
+    end
+  end
+
+  def update_issue(repo_full_name, issue_number, title, description)
+    @client.update_issue(repo_full_name, issue_number, title: title, body: description)
+  end
+
+  def get_issue(owner, repo, issue_number)
+    @client.issue("#{owner}/#{repo}", issue_number)
+  end
+
+  def get_issues(repo_full_name, state: 'open')
+    @client.issues(repo_full_name, state: state)
+  end
+
+  def get_approved_issues(repo_full_name, tag = 'approved')
+    @client.issues(repo_full_name, labels: tag)
+  end
+
+  private
+
+  def fetch_existing_issue_titles(repo_full_name)
+    existing_issues = @client.list_issues(repo_full_name, state: 'all')
+    existing_issues.map(&amp;:title)
+  end
+
+  def create_issue_with_retry(repo_full_name, title, max_retries = 5)
+    retries = 0
+    begin
+      @client.create_issue(repo_full_name, title)
+    rescue Octokit::TooManyRequests =&gt; e
+      if retries &lt; max_retries
+        sleep_time = 2**(retries + 1)
+        puts "Hit rate limit. Retrying in #{sleep_time} seconds..."
+        sleep(sleep_time)
+        retries += 1
+        retry
+      else
+        puts "Reached the maximum number of retries. Please try again later."
+        exit(1)
+      end
+    end
+  end
+end
+
+
+
+# File: openai_client.rb
+require "openai"
+
+class OpenAIClient
+  def initialize(api_key, model)
+    OpenAI.configure do |config|
+      config.access_token = api_key
+    end
+    @client = OpenAI::Client.new
+    @model = model
+  end
+
+  def generate_code(prompt, max_tokens = 150, n = 1, stop = nil, temperature = 0.5, max_attempts = 5)
+    attempt = 1
+  
+    while attempt &lt;= max_attempts
+      response = @client.chat(parameters: {
+        model: @model,
+        messages: [
+          {role: "system", content: "You are a helpful assistant that translates English descriptions into concise Ruby code."},
+          {role: "user", content: "#{prompt}"}
+        ],
+        max_tokens: max_tokens,
+        n: n,
+        stop: stop,
+        temperature: temperature
+      })
+  
+      content = response["choices"][0]["message"]["content"]
+      backticks_count = content.scan(/```/).count
+  
+      if backticks_count % 2 == 0
+        code_blocks = content.scan(/```ruby\n(.*?)\n```/m).flatten
+        extracted_code = code_blocks.map(&amp;:strip).join("\n\n")
+  
+        if ENV['DEBUG'] == 'true'
+          puts "---- Full Response Message Content ----"
+          puts content
+          puts "---- Extracted Code Blocks ----"
+          puts extracted_code
+        end
+  
+        return extracted_code
+      else
+        attempt += 1
+        puts "Unbalanced triple backticks detected. Retrying (attempt #{attempt})..." if ENV['DEBUG'] == 'true'
+      end
+    end
+  
+    raise "Unable to generate code with balanced triple backticks after #{max_attempts} attempts."
+  end
+
+end
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Your code is well-structured and accomplishes the main tasks, such as fetching GitHub issues, generating code using the GPT API, and writing the code to files. The last piece you mentioned is to push the code to GitHub as a pull request. To achieve this, you can follow these steps:
+
+
+Clone the repository locally.
+
+Create a new branch for each issue.
+
+Commit the generated code to the new branch.
+
+Push the new branch to the remote repository.
+
+Create a pull request.
+
+
+You can implement these steps in the 
+auto_generate_code
+ function in 
+gh_auto_code_generation.rb
+. Here's a suggestion on how to modify this function:
+
+
+
+
+ruby
+
+
+
+
+require
+ 
+'fileutils'
+
+
+
+def
+ 
+auto_generate_code
+(
+api_key, your_username, repo_name
+)
+  approved_issues = gh_client.get_approved_issues(
+"
+#{your_username}
+/
+#{repo_name}
+"
+)
+
+  approved_issues.each 
+do
+ |
+issue
+|
+    issue_number = issue[
+:number
+]
+    puts 
+"Generating code for approved issue #
+#{issue_number}
+..."
+
+
+    
+# Clone the repository locally
+
+    local_repo_path = 
+"
+#{your_username}
+_
+#{repo_name}
+_
+#{issue_number}
+"
+
+    
+FileUtils
+.rm_rf(local_repo_path) 
+if
+ 
+Dir
+.exist?(local_repo_path)
+    gh_client.clone_repository(
+"
+#{your_username}
+/
+#{repo_name}
+"
+, local_repo_path)
+
+    
+# Create a new branch for the issue
+
+    branch_name = 
+"issue_
+#{issue_number}
+_autogenerated_code"
+
+    gh_client.create_branch(local_repo_path, branch_name)
+
+    
+# Generate code and commit
+
+    generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
+    gh_client.commit_changes(local_repo_path, 
+"Auto-generated code for issue #
+#{issue_number}
+"
+)
+
+    
+# Push the new branch to the remote repository
+
+    gh_client.push_branch(local_repo_path, your_username, repo_name, branch_name)
+
+    
+# Create a pull request
+
+    pr_title = 
+"Auto-generated code for issue #
+#{issue_number}
+"
+
+    gh_client.create_pull_request(
+"
+#{your_username}
+/
+#{repo_name}
+"
+, branch_name, 
+'main'
+, pr_title)
+
+    
+FileUtils
+.rm_rf(local_repo_path)
+  
+end
+
+
+end
+
+
+
+
+
+
+You'll need to add new methods to the 
+GitHubClient
+ class in 
+github_client.rb
+ to support cloning, creating branches, committing changes, pushing branches, and creating pull requests. You can use the 
+git
+ CLI or a Ruby gem like 
+rugged
+ to interact with Git. Here's an example using the 
+git
+ CLI:
+
+
+
+
+ruby
+
+
+
+
+class
+ 
+GitHubClient
+
+  
+# ...
+
+  
+  
+def
+ 
+clone_repository
+(
+repo_full_name, local_repo_path
+)
+    system(
+"git clone https://github.com/
+#{repo_full_name}
+.git 
+#{local_repo_path}
+"
+)
+  
+end
+
+
+  
+def
+ 
+create_branch
+(
+local_repo_path, branch_name
+)
+    
+Dir
+.chdir(local_repo_path) 
+do
+
+      system(
+"git checkout -b 
+#{branch_name}
+"
+)
+    
+end
+
+  
+end
+
+
+  
+def
+ 
+commit_changes
+(
+local_repo_path, commit_message
+)
+    
+Dir
+.chdir(local_repo_path) 
+do
+
+      system(
+"git add ."
+)
+      system(
+"git commit -m '
+#{commit_message}
+'"
+)
+    
+end
+
+  
+end
+
+
+  
+def
+ 
+push_branch
+(
+local_repo_path, your_username, repo_name, branch_name
+)
+    
+Dir
+.chdir(local_repo_path) 
+do
+
+      system(
+"git push --set-upstream https://
+#{api_key}
+@github.com/
+#{your_username}
+/
+#{repo_name}
+.git 
+#{branch_name}
+"
+)
+    
+end
+
+  
+end
+
+
+  
+def
+ 
+create_pull_request
+(
+repo_full_name, head_branch, base_branch, title
+)
+    
+@client
+.create_pull_request(repo_full_name, base_branch, head_branch, title)
+  
+end
+
+
+end
+
+
+
+
+
+
+Finally, update the 
+generate_code_from_issue
+ function in 
+gh_generate_code_from_issue.rb
+ to accept an additional parameter 
+local_repo_path
+ and change the
+
+
+
+
+
+
+
+
+
+
+
+
+
+please continue
+
+
+
+
+
+
+
+
+
+
+
+Sure, you'll need to modify the 
+generate_code_from_issue
+ function in 
+gh_generate_code_from_issue.rb
+ to accept the 
+local_repo_path
+ parameter and change the paths where the generated code files are saved to match the local repository path.
+
+Here's the updated 
+generate_code_from_issue
+ function:
+
+
+
+
+ruby
+
+
+
+
+def
+ 
+generate_code_from_issue
+(
+your_username, repo_name, issue_number, local_repo_path
+)
+  api_key = 
+ENV
+[
+'GITHUB_API_KEY'
+]
+  gh_client = 
+GitHubClient
+.new(api_key)
+
+  model = 
+ENV
+.fetch(
+'GPT_MODEL'
+, 
+'gpt-3.5-turbo'
+)
+  openai_api_key = 
+ENV
+[
+'OPENAI_API_KEY'
+]
+  openai_client = 
+OpenAIClient
+.new(openai_api_key, model)
+
+  issue = gh_client.get_issue(your_username, repo_name, issue_number)
+  issue_title = issue.title
+  issue_description = issue.body
+
+  
+# Split issue description into list items with hyphens
+
+  list_items = issue_description.split(
+"\n"
+).select { |
+line
+| line.start_with?(
+'-'
+) }
+  
+  list_items.each_with_index 
+do
+ |
+item, index
+|
+    prompt = 
+&lt;&lt;-PROMPT
+  Generate a Ruby function to accomplish the following task in a Ruby on Rails project:
+  
+  Task: 
+#{item.strip}
+
+  
+  Context:
+  - This function is part of a larger Rails project.
+  - The project follows standard Rails conventions.
+  
+  Requirements:
+  - The function should be written in Ruby.
+  - The function should have a descriptive name based on the task.
+  - Include comments to explain the purpose of the function and any assumptions made.
+  
+  Example Input: (if applicable)
+  - ...
+  
+  Example Output: (if applicable)
+  - ...
+  
+  Please provide the Ruby function to accomplish this task.
+    PROMPT
+
+  
+    code = openai_client.generate_code(prompt)
+
+    file_path = 
+File
+.join(local_repo_path, 
+"generated_code_
+#{issue_number}
+_task_
+#{index + 
+1
+}
+.rb"
+)
+    
+File
+.open(file_path, 
+'w'
+) 
+do
+ |
+file
+|
+      file.puts code
+    
+end
+
+
+    puts 
+"Generated code for issue #
+#{issue_number}
+ task 
+#{index + 
+1
+}
+ saved to 
+#{file_path}
+"
+
+  
+end
+
+
+end
+
+
+
+
+
+
+With these changes, your code should now be able to clone the repository, generate code for each approved issue, commit the changes, push the new branches, and create pull requests for each issue.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Is there a benefit to using `rugged` instead? Is there a way to do these operations in-memory instead of on the filesystem?
+
+
+
+
+
+
+
+
+
+
+
+
+Rugged
+ is a Ruby bindings library for the 
+libgit2
+ C library, which offers more direct control and lower-level operations with Git repositories compared to the 
+git
+ command-line tool. Using 
+Rugged
+ may provide performance benefits and greater flexibility in some cases.
+
+There are benefits to using 
+Rugged
+:
+
+
+Performance: As a native library, 
+Rugged
+ may offer better performance compared to shelling out to the 
+git
+ command.
+
+Flexibility: 
+Rugged
+ provides lower-level Git operations, which may give you more control over how you interact with repositories.
+
+
+However, the in-memory operations with Git repositories using 
+Rugged
+ are limited. While it's possible to create and manipulate objects like blobs, trees, and commits in-memory, it's not possible to perform full repository operations like cloning or pushing in-memory. You still need a local filesystem representation of the repository to perform these operations.
+
+Considering your use case, it would be more efficient to generate code files directly in the local repository's working directory, commit changes, and push them to the remote repository.
+
+If you decide to use 
+Rugged
+, you'll need to replace the parts of your code that interact with the filesystem and the 
+git
+ command with the corresponding 
+Rugged
+ methods. However, keep in mind that you will still need to have a local filesystem representation of the repository for certain operations, as in-memory operations with 
+Rugged
+ are limited.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Provide me some code to append that lets me run `gh_auto_code_generation.rb your_username repo_name`
+
+
+
+
+
+
+
+
+
+
+
+To run 
+gh_auto_code_generation.rb
+ with the provided arguments, you need to make sure that you have cloned the repository locally. Here's a sample script that clones the repository, calls the 
+auto_generate_code
+ function, and pushes the generated code to the remote repository. I'll be using the 
+git
+ command for simplicity.
+
+
+
+
+ruby
+
+
+
+
+# File: gh_auto_code_generation.rb
+
+
+
+# Add this at the top of the file
+
+
+require
+ 
+'fileutils'
+
+
+
+# ...
+
+
+
+def
+ 
+clone_repository
+(
+username, repo_name
+)
+  repo_url = 
+"https://github.com/
+#{username}
+/
+#{repo_name}
+.git"
+
+  local_path = 
+"tmp/
+#{repo_name}
+"
+
+
+  
+FileUtils
+.rm_rf(local_path) 
+if
+ 
+Dir
+.exist?(local_path)
+  
+FileUtils
+.mkdir_p(local_path)
+
+  system(
+"git clone 
+#{repo_url}
+ 
+#{local_path}
+"
+)
+  local_path
+
+end
+
+
+
+def
+ 
+push_to_remote_repository
+(
+local_repo_path, issue_number
+)
+  
+Dir
+.chdir(local_repo_path) 
+do
+
+    system(
+"git checkout -b issue_
+#{issue_number}
+"
+)
+    system(
+"git add ."
+)
+    system(
+"git commit -m 'Add generated code for issue #
+#{issue_number}
+'"
+)
+    system(
+"git push origin issue_
+#{issue_number}
+"
+)
+  
+end
+
+
+end
+
+
+
+# ...
+
+
+
+# Update the 'auto_generate_code' function
+
+
+def
+ 
+auto_generate_code
+(
+api_key, your_username, repo_name
+)
+  local_repo_path = clone_repository(your_username, repo_name)
+
+  approved_issues = gh_client.get_approved_issues(
+"
+#{your_username}
+/
+#{repo_name}
+"
+)
+
+  approved_issues.each 
+do
+ |
+issue
+|
+    issue_number = issue[
+:number
+]
+    puts 
+"Generating code for approved issue #
+#{issue_number}
+..."
+
+    generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
+    push_to_remote_repository(local_repo_path, issue_number)
+  
+end
+
+
+end
+
+
+
+# ...
+
+
+
+if
+ 
+__FILE__
+ == 
+$0
+
+  your_username = 
+ARGV
+[
+0
+]
+  repo_name = 
+ARGV
+[
+1
+]
+
+  auto_generate_code(api_key, your_username, repo_name)
+
+end
+
+
+
+
+
+
+Now, you can run 
+gh_auto_code_generation.rb
+ with the provided arguments:
+
+
+
+
+ruby gh_auto_code_generation.rb your_username repo_name
+
+
+
+
+
+This will clone the repository, generate code for each approved issue, commit the changes, and push the new branches to the remote repository.
+
+
+
+
+
+
+
+
+
+
+
+
+
+it wants a username for github, how can I use my ENV['GITHUB_API_KEY'] instead?
+
+
+
+
+
+
+
+
+
+
+
+You can't use the 
+GITHUB_API_KEY
+ directly as a username because it is an API key used for authentication, while the username is used for identifying the user or organization owning the repository. However, you can fetch your GitHub username using the API key by making an API request to get the authenticated user's information.
+
+Update the 
+GitHubClient
+ class to include a new method called 
+get_authenticated_user
+:
+
+
+
+
+ruby
+
+
+
+
+# File: github_client.rb
+
+
+
+# ...
+
+
+
+class
+ 
+GitHubClient
+
+  
+# ...
+
+
+  
+def
+ 
+get_authenticated_user
+
+    
+@client
+.user
+  
+end
+
+
+  
+# ...
+
+
+end
+
+
+
+
+
+
+Now, update the 
+gh_auto_code_generation.rb
+ script to fetch the authenticated user's username and use it for the subsequent steps:
+
+
+
+
+ruby
+
+
+
+
+# File: gh_auto_code_generation.rb
+
+
+
+# ...
+
+
+
+if
+ 
+__FILE__
+ == 
+$0
+
+  api_key = 
+ENV
+[
+'GITHUB_API_KEY'
+]
+  gh_client = 
+GitHubClient
+.new(api_key)
+  
+  authenticated_user = gh_client.get_authenticated_user
+  your_username = authenticated_user.login
+  repo_name = 
+ARGV
+[
+0
+]
+
+  auto_generate_code(api_key, your_username, repo_name)
+
+end
+
+
+
+
+
+
+With these changes, you can run the script by providing only the repository name:
+
+
+
+
+ruby gh_auto_code_generation.rb repo_name
+
+
+
+
+
+The script will use your API key to fetch your GitHub username and then proceed with the auto code generation process.
+
+
+
+
+
+
+
+
+
+
+
+
+
+That will be helpful! However, I meant: when the git command to clone runs, it asks for a username on the command-prompt, and I'd like this to run autonomously in the background at some point. How can I use my API key instead of a username and password when performing the git operations?
+
+```
+% ruby gh_auto_code_generation.rb lingnik codehelper
+To use retry middleware with Faraday v2.0+, install `faraday-retry` gem
+Cloning into 'tmp/codehelper'...
+Username for 'https://github.com':
+```
+
+Note: I refactored the local git client operations into a `git_client.rb` file under a class named `GitClient`.
+
+
+
+
+
+
+
+
+
+
+
+If you have refactored the local git operations into a 
+git_client.rb
+ file and the 
+GitClient
+ class, you can use the GitHub API key to authenticate your Git operations by including it in the clone URL as follows:
+
+Update your 
+GitClient
+ class to accept the API key and use it when cloning the repository:
+
+
+
+
+ruby
+
+
+
+
+# File: git_client.rb
+
+
+
+require
+ 
+'rugged'
+
+
+
+class
+ 
+GitClient
+
+  
+def
+ 
+initialize
+(
+api_key
+)
+    
+@api_key
+ = api_key
+  
+end
+
+
+  
+def
+ 
+clone_repo
+(
+repo_url, local_path
+)
+    clone_url = repo_url.sub(
+"https://"
+, 
+"https://
+#{
+@api_key
+}
+@"
+)
+    
+Rugged
+
+:
+
+:Repository
+.clone_at(clone_url, local_path)
+  
+end
+
+
+  
+# ... other Git operations
+
+
+end
+
+
+
+
+
+
+Now, when you use the 
+GitClient
+ to clone a repository, it will include the API key in the URL for authentication, and it should not prompt for a username. However, keep in mind that using an API key in the URL may expose it in logs or command history, so use caution when implementing this approach. It is generally recommended to use SSH keys or other authentication methods that do not expose sensitive credentials.
+
+
+
+
+
+
+
+
+
+
+
+
+
+Oh, great idea. Let's use SSH keys instead! That just means changing from http-style git operations to git/ssh-style git operations, right?
+
+
+
+
+
+
+
+
+
+
+
+Yes, you can switch from using HTTPS to using SSH for your Git operations. This will allow you to authenticate using your SSH key pair. To do this, you need to update the repository URL to use the SSH format and ensure you have your SSH key set up correctly on your local machine and your GitHub account.
+
+First, make sure you have an SSH key pair on your local machine. If you don't have one, you can generate a new key pair with the following command:
+
+
+
+
+bash
+
+
+
+ssh-keygen -t ed25519 -C 
+"your_email@example.com"
+
+
+
+
+
+
+Next, add your public SSH key to your GitHub account. You can find the public key in the 
+~/.ssh/id_ed25519.pub
+ file (or 
+~/.ssh/id_rsa.pub
+ if you are using RSA). Copy the contents of the file and add it to your GitHub account's SSH keys under Settings &gt; SSH and GPG keys &gt; New SSH key.
+
+Now, update the 
+git_client.rb
+ file to use the SSH format for the repository URL:
+
+
+
+
+ruby
+
+
+
+
+# File: git_client.rb
+
+
+
+require
+ 
+'rugged'
+
+
+
+class
+ 
+GitClient
+
+  
+def
+ 
+initialize
+
+  
+end
+
+
+  
+def
+ 
+clone_repo
+(
+repo_url, local_path
+)
+    ssh_url = repo_url.sub(
+"https://github.com/"
+, 
+"git@github.com:"
+)
+    
+Rugged
+
+:
+
+:Repository
+.clone_at(ssh_url, local_path)
+  
+end
+
+
+  
+# ... other Git operations
+
+
+end
+
+
+
+
+
+
+With these changes, when you use the 
+GitClient
+ to clone a repository, it will use the SSH format for the URL and authenticate using your local SSH key. You should not be prompted for a username or password.
+
+
+
+
+
+
+
+
+
+
+
+
+
+gh_auto_code_generation.rb:31:in `block in auto_generate_code': private method `generate_code_from_issue' called for #&lt;GitClient:0x0000000135aede50&gt; (NoMethodError)
+	from gh_auto_code_generation.rb:28:in `each'
+	from gh_auto_code_generation.rb:28:in `auto_generate_code'
+	from gh_auto_code_generation.rb:44:in `&lt;main&gt;'
+
+
+
+
+
+
+
+
+
+
+
+It seems that the 
+generate_code_from_issue
+ method is being called on an instance of the 
+GitClient
+ class instead of a global method. You need to make sure you are using the right class or method to call 
+generate_code_from_issue
+. Assuming you have a 
+GitHubClient
+ and 
+GitClient
+ in your code, you should be using the 
+GitHubClient
+ instance to call the 
+get_approved_issues
+ method and then call the 
+generate_code_from_issue
+ method for each approved issue.
+
+Update the 
+auto_generate_code
+ method in the 
+gh_auto_code_generation.rb
+ file as follows:
+
+
+
+
+ruby
+
+
+
+
+# File: gh_auto_code_generation.rb
+
+
+
+# ...
+
+
+def
+ 
+auto_generate_code
+(
+api_key, your_username, repo_name, issue_number
+)
+  gh_client = 
+GitHubClient
+.new(api_key)
+  
+  approved_issues = gh_client.get_approved_issues(
+"
+#{your_username}
+/
+#{repo_name}
+"
+)
+  
+  approved_issues.each 
+do
+ |
+issue
+|
+    issue_number = issue[
+:number
+]
+    puts 
+"Generating code for approved issue #
+#{issue_number}
+..."
+
+    generate_code_from_issue(your_username, repo_name, issue_number)
+  
+end
+
+
+end
+
+
+# ...
+
+
+
+
+
+
+This should fix the 
+NoMethodError
+ issue you encountered.
+
+
+
+
+
+
+
+
+
+

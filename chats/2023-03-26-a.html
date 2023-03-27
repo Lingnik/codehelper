@@ -1,0 +1,563 @@
+<!DOCTYPE html><html><head>  <meta charset="utf-8"/>  <title>Chat GPT: GitHub auto-code generation.</title>  <meta name="generator" content="chatGPT Saving Bookmark"/><style>body {  background-color: rgb(32,33,35);  color: rgb(236,236,241);  font-size: 16px;  font-family: sans-serif;  line-height: 28px;  margin: 0;}body > .w-full {  padding: 30px;}/* prompt */body > .w-full:nth-child(2n+1) {  background: rgb(52,53,65);}/* response */body > .w-full:nth-child(2n+2) {  background: rgb(68,70,84);}a, a:visited {  color: #7792cd;}pre {  margin: 0 0 1em 0;  display: inline-block;  width: 100%;}pre code.hljs {  margin-bottom: 1em;  border-radius: 5px;}.whitespace-pre-wrap {  white-space: pre-wrap;}.flex-col {  max-width: 850px;  margin: 0px auto;}</style><link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.7.0/build/styles/default.min.css"/></head><body><div class="flex w-full items-center justify-center gap-1 border-b border-black/10 bg-gray-50 p-3 text-gray-500 dark:border-gray-900/50 dark:bg-gray-700 dark:text-gray-300">Model: GPT-4</div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">I'm working on a ruby project that fetches GitHub issues, figures out which ones are approved to work on, uses the GPT API to write the code, and pushes it up to GitHub as a Pull Request. The last step is the piece that remains, I think. Can you review my code and suggest how I should approach this problem next?
+
+# File: gh_auto_code_generation.rb
+require_relative 'github_client'
+require_relative 'gh_generate_code_from_issue'
+require_relative 'openai_client'
+
+your_username = ARGV[0]
+repo_name = ARGV[1]
+
+api_key = ENV['GITHUB_API_KEY']
+gh_client = GitHubClient.new(api_key)
+
+def generate_script_file(issue_title, file_paths)
+  script_file_name = issue_title.split.join("_").downcase + "_script.rb"
+  code = file_paths.map { |path| File.read(path) }.join("\n")
+  prompt = &lt;&lt;-PROMPT
+#{code}
+
+Please provide a script to run all the functions in the correct order to complete the '#{issue_title}' task.
+  PROMPT
+
+  script = @openai_client.generate_code(prompt, max_tokens = 2048, n = 1, stop = "\n", temperature = 0.5, max_attempts = 5)
+
+  File.write(script_file_name, script)
+  puts "Generated script file '#{script_file_name}'"
+end
+
+def auto_generate_code(api_key, your_username, repo_name, issue_number)
+  approved_issues = gh_client.get_approved_issues("#{your_username}/#{repo_name}")
+  
+  approved_issues.each do |issue|
+    issue_number = issue[:number]
+    puts "Generating code for approved issue ##{issue_number}..."
+    generate_code_from_issue(your_username, repo_name, issue_number)
+  end
+end
+
+
+# File: gh_create_issues.rb
+require_relative 'github_client'
+require 'json'
+require 'optparse'
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: gh_create_issues.rb [options]"
+
+  opts.on('-u', '--username USERNAME', 'Your GitHub username') do |username|
+    options[:username] = username
+  end
+
+  opts.on('-r', '--repo-name REPO_NAME', 'The name of the repository to create issues in') do |repo_name|
+    options[:repo_name] = repo_name
+  end
+end.parse!
+
+# Initialize the GitHub client
+github_client = GitHubClient.new
+
+# Repository's full name
+repo_full_name = "#{options[:username]}/#{options[:repo_name]}"
+
+# Read the list of issues from the 'seed_issues.json' file in the same directory
+file_path = File.join(__dir__, 'seed_issues.json')
+issue_titles = JSON.parse(File.read(file_path))
+
+# Create GitHub issues for each title in the JSON data
+github_client.create_issues(repo_full_name, issue_titles)
+
+puts "Created #{issue_titles.length} issues in the '#{repo_full_name}' repository."
+
+
+# File: gh_create_repo.rb
+require_relative 'github_client'
+require 'optparse'
+
+options = {}
+OptionParser.new do |opts|
+  opts.banner = "Usage: gh_create_repo.rb [options]"
+
+  opts.on('-u', '--username USERNAME', 'Your GitHub username') do |username|
+    options[:username] = username
+  end
+
+  opts.on('-r', '--repo-name REPO_NAME', 'The name of the repository to create') do |repo_name|
+    options[:repo_name] = repo_name
+  end
+end.parse!
+
+# Initialize the GitHub client
+github_client = GitHubClient.new
+
+# Create a new private GitHub repository
+repo = github_client.create_repository(options[:repo_name], options[:username])
+
+puts "Created private repository '#{options[:repo_name]}'."
+
+
+# File: gh_generate_code_from_issue.rb
+require_relative 'github_client'
+require_relative 'openai_client'
+
+def generate_code_from_issue(your_username, repo_name, issue_number)
+  api_key = ENV['GITHUB_API_KEY']
+  gh_client = GitHubClient.new(api_key)
+
+  model = ENV.fetch('GPT_MODEL', 'gpt-3.5-turbo')
+  openai_api_key = ENV['OPENAI_API_KEY']
+  openai_client = OpenAIClient.new(openai_api_key, model)
+
+  issue = gh_client.get_issue(your_username, repo_name, issue_number)
+  issue_title = issue.title
+  issue_description = issue.body
+
+  # Split issue description into list items with hyphens
+  list_items = issue_description.split("\n").select { |line| line.start_with?('-') }
+  
+  list_items.each_with_index do |item, index|
+    prompt = &lt;&lt;-PROMPT
+  Generate a Ruby function to accomplish the following task in a Ruby on Rails project:
+  
+  Task: #{item.strip}
+  
+  Context:
+  - This function is part of a larger Rails project.
+  - The project follows standard Rails conventions.
+  
+  Requirements:
+  - The function should be written in Ruby.
+  - The function should have a descriptive name based on the task.
+  - Include comments to explain the purpose of the function and any assumptions made.
+  
+  Example Input: (if applicable)
+  - ...
+  
+  Example Output: (if applicable)
+  - ...
+  
+  Please provide the Ruby function to accomplish this task.
+    PROMPT
+  
+    code = openai_client.generate_code(prompt)
+  
+    File.open("generated_code_#{issue_number}_task_#{index + 1}.rb", 'w') do |file|
+      file.puts code
+    end
+
+  puts "Generated code for issue ##{issue_number} task #{index + 1} saved to generated_code_#{issue_number}_task_#{index + 1}.rb"
+  end
+
+end
+
+if __FILE__ == $0
+  your_username = ARGV[0]
+  repo_name = ARGV[1]
+  issue_number = ARGV[2].to_i
+  generate_code_from_issue(your_username, repo_name, issue_number)
+end
+
+
+# File: gh_update_issue.rb
+# gh_update_issue.rb
+
+require_relative 'github_client'
+require 'json'
+
+if ARGV.length &lt; 3
+  puts "Usage: ruby gh_update_issue.rb &lt;repo_name&gt; &lt;your_username&gt; &lt;issue_number&gt;"
+  exit(1)
+end
+
+repo_name = ARGV[0]
+your_username = ARGV[1]
+issue_number = ARGV[2].to_i
+repo_full_name = "#{your_username}/#{repo_name}"
+
+github_client = GitHubClient.new
+
+json_file_path = 'seed_issue_1.json'
+data = JSON.parse(File.read(json_file_path))
+
+title = data['title']
+description = data['description'].map { |step| "- #{step}" }.join("\n")
+
+github_client.update_issue(repo_full_name, issue_number, title, description)
+puts "Issue ##{issue_number} has been updated."
+
+
+# File: github_client.rb
+require 'octokit'
+require 'json'
+
+class GitHubClient
+  def initialize(access_token)
+    @client = Octokit::Client.new(access_token: access_token)
+  end
+
+  def create_repository(repo_name, your_username, private_repo = true)
+    @client.create_repository(repo_name, owner: your_username, private: private_repo)
+  end
+
+  def create_issues(repo_full_name, issue_titles)
+    existing_issues = fetch_existing_issue_titles(repo_full_name)
+
+    issue_titles.each_with_index do |title, index|
+      next if existing_issues.include?(title)
+      
+      create_issue_with_retry(repo_full_name, title)
+      puts "Created issue ##{index + 1}: '#{title}'."
+    end
+  end
+
+  def update_issue(repo_full_name, issue_number, title, description)
+    @client.update_issue(repo_full_name, issue_number, title: title, body: description)
+  end
+
+  def get_issue(owner, repo, issue_number)
+    @client.issue("#{owner}/#{repo}", issue_number)
+  end
+
+  def get_issues(repo_full_name, state: 'open')
+    @client.issues(repo_full_name, state: state)
+  end
+
+  def get_approved_issues(repo_full_name, tag = 'approved')
+    @client.issues(repo_full_name, labels: tag)
+  end
+
+  private
+
+  def fetch_existing_issue_titles(repo_full_name)
+    existing_issues = @client.list_issues(repo_full_name, state: 'all')
+    existing_issues.map(&amp;:title)
+  end
+
+  def create_issue_with_retry(repo_full_name, title, max_retries = 5)
+    retries = 0
+    begin
+      @client.create_issue(repo_full_name, title)
+    rescue Octokit::TooManyRequests =&gt; e
+      if retries &lt; max_retries
+        sleep_time = 2**(retries + 1)
+        puts "Hit rate limit. Retrying in #{sleep_time} seconds..."
+        sleep(sleep_time)
+        retries += 1
+        retry
+      else
+        puts "Reached the maximum number of retries. Please try again later."
+        exit(1)
+      end
+    end
+  end
+end
+
+
+
+# File: openai_client.rb
+require "openai"
+
+class OpenAIClient
+  def initialize(api_key, model)
+    OpenAI.configure do |config|
+      config.access_token = api_key
+    end
+    @client = OpenAI::Client.new
+    @model = model
+  end
+
+  def generate_code(prompt, max_tokens = 150, n = 1, stop = nil, temperature = 0.5, max_attempts = 5)
+    attempt = 1
+  
+    while attempt &lt;= max_attempts
+      response = @client.chat(parameters: {
+        model: @model,
+        messages: [
+          {role: "system", content: "You are a helpful assistant that translates English descriptions into concise Ruby code."},
+          {role: "user", content: "#{prompt}"}
+        ],
+        max_tokens: max_tokens,
+        n: n,
+        stop: stop,
+        temperature: temperature
+      })
+  
+      content = response["choices"][0]["message"]["content"]
+      backticks_count = content.scan(/```/).count
+  
+      if backticks_count % 2 == 0
+        code_blocks = content.scan(/```ruby\n(.*?)\n```/m).flatten
+        extracted_code = code_blocks.map(&amp;:strip).join("\n\n")
+  
+        if ENV['DEBUG'] == 'true'
+          puts "---- Full Response Message Content ----"
+          puts content
+          puts "---- Extracted Code Blocks ----"
+          puts extracted_code
+        end
+  
+        return extracted_code
+      else
+        attempt += 1
+        puts "Unbalanced triple backticks detected. Retrying (attempt #{attempt})..." if ENV['DEBUG'] == 'true'
+      end
+    end
+  
+    raise "Unable to generate code with balanced triple backticks after #{max_attempts} attempts."
+  end
+
+end
+
+
+</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>Your code is well-structured and accomplishes the main tasks, such as fetching GitHub issues, generating code using the GPT API, and writing the code to files. The last piece you mentioned is to push the code to GitHub as a pull request. To achieve this, you can follow these steps:</p><ol><li>Clone the repository locally.</li><li>Create a new branch for each issue.</li><li>Commit the generated code to the new branch.</li><li>Push the new branch to the remote repository.</li><li>Create a pull request.</li></ol><p>You can implement these steps in the <code>auto_generate_code</code> function in <code>gh_auto_code_generation.rb</code>. Here's a suggestion on how to modify this function:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-keyword">require</span> <span class="hljs-string">'fileutils'</span>
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">auto_generate_code</span>(<span class="hljs-params">api_key, your_username, repo_name</span>)
+  approved_issues = gh_client.get_approved_issues(<span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>"</span>)
+
+  approved_issues.each <span class="hljs-keyword">do</span> |<span class="hljs-params">issue</span>|
+    issue_number = issue[<span class="hljs-symbol">:number</span>]
+    puts <span class="hljs-string">"Generating code for approved issue #<span class="hljs-subst">#{issue_number}</span>..."</span>
+
+    <span class="hljs-comment"># Clone the repository locally</span>
+    local_repo_path = <span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>_<span class="hljs-subst">#{repo_name}</span>_<span class="hljs-subst">#{issue_number}</span>"</span>
+    <span class="hljs-title class_">FileUtils</span>.rm_rf(local_repo_path) <span class="hljs-keyword">if</span> <span class="hljs-title class_">Dir</span>.exist?(local_repo_path)
+    gh_client.clone_repository(<span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>"</span>, local_repo_path)
+
+    <span class="hljs-comment"># Create a new branch for the issue</span>
+    branch_name = <span class="hljs-string">"issue_<span class="hljs-subst">#{issue_number}</span>_autogenerated_code"</span>
+    gh_client.create_branch(local_repo_path, branch_name)
+
+    <span class="hljs-comment"># Generate code and commit</span>
+    generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
+    gh_client.commit_changes(local_repo_path, <span class="hljs-string">"Auto-generated code for issue #<span class="hljs-subst">#{issue_number}</span>"</span>)
+
+    <span class="hljs-comment"># Push the new branch to the remote repository</span>
+    gh_client.push_branch(local_repo_path, your_username, repo_name, branch_name)
+
+    <span class="hljs-comment"># Create a pull request</span>
+    pr_title = <span class="hljs-string">"Auto-generated code for issue #<span class="hljs-subst">#{issue_number}</span>"</span>
+    gh_client.create_pull_request(<span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>"</span>, branch_name, <span class="hljs-string">'main'</span>, pr_title)
+
+    <span class="hljs-title class_">FileUtils</span>.rm_rf(local_repo_path)
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>You'll need to add new methods to the <code>GitHubClient</code> class in <code>github_client.rb</code> to support cloning, creating branches, committing changes, pushing branches, and creating pull requests. You can use the <code>git</code> CLI or a Ruby gem like <code>rugged</code> to interact with Git. Here's an example using the <code>git</code> CLI:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-keyword">class</span> <span class="hljs-title class_">GitHubClient</span>
+  <span class="hljs-comment"># ...</span>
+  
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">clone_repository</span>(<span class="hljs-params">repo_full_name, local_repo_path</span>)
+    system(<span class="hljs-string">"git clone https://github.com/<span class="hljs-subst">#{repo_full_name}</span>.git <span class="hljs-subst">#{local_repo_path}</span>"</span>)
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">create_branch</span>(<span class="hljs-params">local_repo_path, branch_name</span>)
+    <span class="hljs-title class_">Dir</span>.chdir(local_repo_path) <span class="hljs-keyword">do</span>
+      system(<span class="hljs-string">"git checkout -b <span class="hljs-subst">#{branch_name}</span>"</span>)
+    <span class="hljs-keyword">end</span>
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">commit_changes</span>(<span class="hljs-params">local_repo_path, commit_message</span>)
+    <span class="hljs-title class_">Dir</span>.chdir(local_repo_path) <span class="hljs-keyword">do</span>
+      system(<span class="hljs-string">"git add ."</span>)
+      system(<span class="hljs-string">"git commit -m '<span class="hljs-subst">#{commit_message}</span>'"</span>)
+    <span class="hljs-keyword">end</span>
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">push_branch</span>(<span class="hljs-params">local_repo_path, your_username, repo_name, branch_name</span>)
+    <span class="hljs-title class_">Dir</span>.chdir(local_repo_path) <span class="hljs-keyword">do</span>
+      system(<span class="hljs-string">"git push --set-upstream https://<span class="hljs-subst">#{api_key}</span>@github.com/<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>.git <span class="hljs-subst">#{branch_name}</span>"</span>)
+    <span class="hljs-keyword">end</span>
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">create_pull_request</span>(<span class="hljs-params">repo_full_name, head_branch, base_branch, title</span>)
+    <span class="hljs-variable">@client</span>.create_pull_request(repo_full_name, base_branch, head_branch, title)
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>Finally, update the <code>generate_code_from_issue</code> function in <code>gh_generate_code_from_issue.rb</code> to accept an additional parameter <code>local_repo_path</code> and change the</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">please continue</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>Sure, you'll need to modify the <code>generate_code_from_issue</code> function in <code>gh_generate_code_from_issue.rb</code> to accept the <code>local_repo_path</code> parameter and change the paths where the generated code files are saved to match the local repository path.</p><p>Here's the updated <code>generate_code_from_issue</code> function:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-keyword">def</span> <span class="hljs-title function_">generate_code_from_issue</span>(<span class="hljs-params">your_username, repo_name, issue_number, local_repo_path</span>)
+  api_key = <span class="hljs-variable constant_">ENV</span>[<span class="hljs-string">'GITHUB_API_KEY'</span>]
+  gh_client = <span class="hljs-title class_">GitHubClient</span>.new(api_key)
+
+  model = <span class="hljs-variable constant_">ENV</span>.fetch(<span class="hljs-string">'GPT_MODEL'</span>, <span class="hljs-string">'gpt-3.5-turbo'</span>)
+  openai_api_key = <span class="hljs-variable constant_">ENV</span>[<span class="hljs-string">'OPENAI_API_KEY'</span>]
+  openai_client = <span class="hljs-title class_">OpenAIClient</span>.new(openai_api_key, model)
+
+  issue = gh_client.get_issue(your_username, repo_name, issue_number)
+  issue_title = issue.title
+  issue_description = issue.body
+
+  <span class="hljs-comment"># Split issue description into list items with hyphens</span>
+  list_items = issue_description.split(<span class="hljs-string">"\n"</span>).select { |<span class="hljs-params">line</span>| line.start_with?(<span class="hljs-string">'-'</span>) }
+  
+  list_items.each_with_index <span class="hljs-keyword">do</span> |<span class="hljs-params">item, index</span>|
+    prompt = <span class="hljs-string">&lt;&lt;-PROMPT
+  Generate a Ruby function to accomplish the following task in a Ruby on Rails project:
+  
+  Task: <span class="hljs-subst">#{item.strip}</span>
+  
+  Context:
+  - This function is part of a larger Rails project.
+  - The project follows standard Rails conventions.
+  
+  Requirements:
+  - The function should be written in Ruby.
+  - The function should have a descriptive name based on the task.
+  - Include comments to explain the purpose of the function and any assumptions made.
+  
+  Example Input: (if applicable)
+  - ...
+  
+  Example Output: (if applicable)
+  - ...
+  
+  Please provide the Ruby function to accomplish this task.
+    PROMPT</span>
+  
+    code = openai_client.generate_code(prompt)
+
+    file_path = <span class="hljs-title class_">File</span>.join(local_repo_path, <span class="hljs-string">"generated_code_<span class="hljs-subst">#{issue_number}</span>_task_<span class="hljs-subst">#{index + <span class="hljs-number">1</span>}</span>.rb"</span>)
+    <span class="hljs-title class_">File</span>.open(file_path, <span class="hljs-string">'w'</span>) <span class="hljs-keyword">do</span> |<span class="hljs-params">file</span>|
+      file.puts code
+    <span class="hljs-keyword">end</span>
+
+    puts <span class="hljs-string">"Generated code for issue #<span class="hljs-subst">#{issue_number}</span> task <span class="hljs-subst">#{index + <span class="hljs-number">1</span>}</span> saved to <span class="hljs-subst">#{file_path}</span>"</span>
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>With these changes, your code should now be able to clone the repository, generate code for each approved issue, commit the changes, push the new branches, and create pull requests for each issue.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">Is there a benefit to using `rugged` instead? Is there a way to do these operations in-memory instead of on the filesystem?</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p><code>Rugged</code> is a Ruby bindings library for the <code>libgit2</code> C library, which offers more direct control and lower-level operations with Git repositories compared to the <code>git</code> command-line tool. Using <code>Rugged</code> may provide performance benefits and greater flexibility in some cases.</p><p>There are benefits to using <code>Rugged</code>:</p><ol><li>Performance: As a native library, <code>Rugged</code> may offer better performance compared to shelling out to the <code>git</code> command.</li><li>Flexibility: <code>Rugged</code> provides lower-level Git operations, which may give you more control over how you interact with repositories.</li></ol><p>However, the in-memory operations with Git repositories using <code>Rugged</code> are limited. While it's possible to create and manipulate objects like blobs, trees, and commits in-memory, it's not possible to perform full repository operations like cloning or pushing in-memory. You still need a local filesystem representation of the repository to perform these operations.</p><p>Considering your use case, it would be more efficient to generate code files directly in the local repository's working directory, commit changes, and push them to the remote repository.</p><p>If you decide to use <code>Rugged</code>, you'll need to replace the parts of your code that interact with the filesystem and the <code>git</code> command with the corresponding <code>Rugged</code> methods. However, keep in mind that you will still need to have a local filesystem representation of the repository for certain operations, as in-memory operations with <code>Rugged</code> are limited.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">Provide me some code to append that lets me run `gh_auto_code_generation.rb your_username repo_name`</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>To run <code>gh_auto_code_generation.rb</code> with the provided arguments, you need to make sure that you have cloned the repository locally. Here's a sample script that clones the repository, calls the <code>auto_generate_code</code> function, and pushes the generated code to the remote repository. I'll be using the <code>git</code> command for simplicity.</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: gh_auto_code_generation.rb</span>
+
+<span class="hljs-comment"># Add this at the top of the file</span>
+<span class="hljs-keyword">require</span> <span class="hljs-string">'fileutils'</span>
+
+<span class="hljs-comment"># ...</span>
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">clone_repository</span>(<span class="hljs-params">username, repo_name</span>)
+  repo_url = <span class="hljs-string">"https://github.com/<span class="hljs-subst">#{username}</span>/<span class="hljs-subst">#{repo_name}</span>.git"</span>
+  local_path = <span class="hljs-string">"tmp/<span class="hljs-subst">#{repo_name}</span>"</span>
+
+  <span class="hljs-title class_">FileUtils</span>.rm_rf(local_path) <span class="hljs-keyword">if</span> <span class="hljs-title class_">Dir</span>.exist?(local_path)
+  <span class="hljs-title class_">FileUtils</span>.mkdir_p(local_path)
+
+  system(<span class="hljs-string">"git clone <span class="hljs-subst">#{repo_url}</span> <span class="hljs-subst">#{local_path}</span>"</span>)
+  local_path
+<span class="hljs-keyword">end</span>
+
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">push_to_remote_repository</span>(<span class="hljs-params">local_repo_path, issue_number</span>)
+  <span class="hljs-title class_">Dir</span>.chdir(local_repo_path) <span class="hljs-keyword">do</span>
+    system(<span class="hljs-string">"git checkout -b issue_<span class="hljs-subst">#{issue_number}</span>"</span>)
+    system(<span class="hljs-string">"git add ."</span>)
+    system(<span class="hljs-string">"git commit -m 'Add generated code for issue #<span class="hljs-subst">#{issue_number}</span>'"</span>)
+    system(<span class="hljs-string">"git push origin issue_<span class="hljs-subst">#{issue_number}</span>"</span>)
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+
+<span class="hljs-comment"># ...</span>
+
+<span class="hljs-comment"># Update the 'auto_generate_code' function</span>
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">auto_generate_code</span>(<span class="hljs-params">api_key, your_username, repo_name</span>)
+  local_repo_path = clone_repository(your_username, repo_name)
+
+  approved_issues = gh_client.get_approved_issues(<span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>"</span>)
+
+  approved_issues.each <span class="hljs-keyword">do</span> |<span class="hljs-params">issue</span>|
+    issue_number = issue[<span class="hljs-symbol">:number</span>]
+    puts <span class="hljs-string">"Generating code for approved issue #<span class="hljs-subst">#{issue_number}</span>..."</span>
+    generate_code_from_issue(your_username, repo_name, issue_number, local_repo_path)
+    push_to_remote_repository(local_repo_path, issue_number)
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+
+<span class="hljs-comment"># ...</span>
+
+<span class="hljs-keyword">if</span> <span class="hljs-variable constant_">__FILE__</span> == <span class="hljs-variable">$0</span>
+  your_username = <span class="hljs-variable constant_">ARGV</span>[<span class="hljs-number">0</span>]
+  repo_name = <span class="hljs-variable constant_">ARGV</span>[<span class="hljs-number">1</span>]
+
+  auto_generate_code(api_key, your_username, repo_name)
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>Now, you can run <code>gh_auto_code_generation.rb</code> with the provided arguments:</p><pre><div class="bg-black rounded-md mb-4"><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs">ruby gh_auto_code_generation.rb your_username repo_name
+</code></div></div></pre><p>This will clone the repository, generate code for each approved issue, commit the changes, and push the new branches to the remote repository.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">it wants a username for github, how can I use my ENV['GITHUB_API_KEY'] instead?</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>You can't use the <code>GITHUB_API_KEY</code> directly as a username because it is an API key used for authentication, while the username is used for identifying the user or organization owning the repository. However, you can fetch your GitHub username using the API key by making an API request to get the authenticated user's information.</p><p>Update the <code>GitHubClient</code> class to include a new method called <code>get_authenticated_user</code>:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: github_client.rb</span>
+
+<span class="hljs-comment"># ...</span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GitHubClient</span>
+  <span class="hljs-comment"># ...</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">get_authenticated_user</span>
+    <span class="hljs-variable">@client</span>.user
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-comment"># ...</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>Now, update the <code>gh_auto_code_generation.rb</code> script to fetch the authenticated user's username and use it for the subsequent steps:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: gh_auto_code_generation.rb</span>
+
+<span class="hljs-comment"># ...</span>
+
+<span class="hljs-keyword">if</span> <span class="hljs-variable constant_">__FILE__</span> == <span class="hljs-variable">$0</span>
+  api_key = <span class="hljs-variable constant_">ENV</span>[<span class="hljs-string">'GITHUB_API_KEY'</span>]
+  gh_client = <span class="hljs-title class_">GitHubClient</span>.new(api_key)
+  
+  authenticated_user = gh_client.get_authenticated_user
+  your_username = authenticated_user.login
+  repo_name = <span class="hljs-variable constant_">ARGV</span>[<span class="hljs-number">0</span>]
+
+  auto_generate_code(api_key, your_username, repo_name)
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>With these changes, you can run the script by providing only the repository name:</p><pre><div class="bg-black rounded-md mb-4"><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs">ruby gh_auto_code_generation.rb repo_name
+</code></div></div></pre><p>The script will use your API key to fetch your GitHub username and then proceed with the auto code generation process.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">That will be helpful! However, I meant: when the git command to clone runs, it asks for a username on the command-prompt, and I'd like this to run autonomously in the background at some point. How can I use my API key instead of a username and password when performing the git operations?
+
+```
+% ruby gh_auto_code_generation.rb lingnik codehelper
+To use retry middleware with Faraday v2.0+, install `faraday-retry` gem
+Cloning into 'tmp/codehelper'...
+Username for 'https://github.com':
+```
+
+Note: I refactored the local git client operations into a `git_client.rb` file under a class named `GitClient`.</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>If you have refactored the local git operations into a <code>git_client.rb</code> file and the <code>GitClient</code> class, you can use the GitHub API key to authenticate your Git operations by including it in the clone URL as follows:</p><p>Update your <code>GitClient</code> class to accept the API key and use it when cloning the repository:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: git_client.rb</span>
+
+<span class="hljs-keyword">require</span> <span class="hljs-string">'rugged'</span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GitClient</span>
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">initialize</span>(<span class="hljs-params">api_key</span>)
+    <span class="hljs-variable">@api_key</span> = api_key
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">clone_repo</span>(<span class="hljs-params">repo_url, local_path</span>)
+    clone_url = repo_url.sub(<span class="hljs-string">"https://"</span>, <span class="hljs-string">"https://<span class="hljs-subst">#{<span class="hljs-variable">@api_key</span>}</span>@"</span>)
+    <span class="hljs-title class_">Rugged</span><span class="hljs-symbol">:</span><span class="hljs-symbol">:Repository</span>.clone_at(clone_url, local_path)
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-comment"># ... other Git operations</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>Now, when you use the <code>GitClient</code> to clone a repository, it will include the API key in the URL for authentication, and it should not prompt for a username. However, keep in mind that using an API key in the URL may expose it in logs or command history, so use caution when implementing this approach. It is generally recommended to use SSH keys or other authentication methods that do not expose sensitive credentials.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">Oh, great idea. Let's use SSH keys instead! That just means changing from http-style git operations to git/ssh-style git operations, right?</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>Yes, you can switch from using HTTPS to using SSH for your Git operations. This will allow you to authenticate using your SSH key pair. To do this, you need to update the repository URL to use the SSH format and ensure you have your SSH key set up correctly on your local machine and your GitHub account.</p><p>First, make sure you have an SSH key pair on your local machine. If you don't have one, you can generate a new key pair with the following command:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>bash</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-bash">ssh-keygen -t ed25519 -C <span class="hljs-string">"your_email@example.com"</span>
+</code></div></div></pre><p>Next, add your public SSH key to your GitHub account. You can find the public key in the <code>~/.ssh/id_ed25519.pub</code> file (or <code>~/.ssh/id_rsa.pub</code> if you are using RSA). Copy the contents of the file and add it to your GitHub account's SSH keys under Settings &gt; SSH and GPG keys &gt; New SSH key.</p><p>Now, update the <code>git_client.rb</code> file to use the SSH format for the repository URL:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: git_client.rb</span>
+
+<span class="hljs-keyword">require</span> <span class="hljs-string">'rugged'</span>
+
+<span class="hljs-keyword">class</span> <span class="hljs-title class_">GitClient</span>
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">initialize</span>
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-keyword">def</span> <span class="hljs-title function_">clone_repo</span>(<span class="hljs-params">repo_url, local_path</span>)
+    ssh_url = repo_url.sub(<span class="hljs-string">"https://github.com/"</span>, <span class="hljs-string">"git@github.com:"</span>)
+    <span class="hljs-title class_">Rugged</span><span class="hljs-symbol">:</span><span class="hljs-symbol">:Repository</span>.clone_at(ssh_url, local_path)
+  <span class="hljs-keyword">end</span>
+
+  <span class="hljs-comment"># ... other Git operations</span>
+<span class="hljs-keyword">end</span>
+</code></div></div></pre><p>With these changes, when you use the <code>GitClient</code> to clone a repository, it will use the SSH format for the URL and authenticate using your local SSH key. You should not be prompted for a username or password.</p></div></div></div><div class="flex justify-between"></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 dark:bg-gray-800"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap">gh_auto_code_generation.rb:31:in `block in auto_generate_code': private method `generate_code_from_issue' called for #&lt;GitClient:0x0000000135aede50&gt; (NoMethodError)
+	from gh_auto_code_generation.rb:28:in `each'
+	from gh_auto_code_generation.rb:28:in `auto_generate_code'
+	from gh_auto_code_generation.rb:44:in `&lt;main&gt;'</div></div></div></div></div><div class="group w-full text-gray-800 dark:text-gray-100 border-b border-black/10 dark:border-gray-900/50 bg-gray-50 dark:bg-[#444654]"><div class="text-base gap-4 md:gap-6 md:max-w-2xl lg:max-w-2xl xl:max-w-3xl p-4 md:py-6 flex lg:px-0 m-auto"><div class="relative flex w-[calc(100%-50px)] flex-col gap-1 md:gap-3 lg:w-[calc(100%-115px)]"><div class="flex flex-grow flex-col gap-3"><div class="min-h-[20px] flex flex-col items-start gap-4 whitespace-pre-wrap"><div class="markdown prose w-full break-words dark:prose-invert light"><p>It seems that the <code>generate_code_from_issue</code> method is being called on an instance of the <code>GitClient</code> class instead of a global method. You need to make sure you are using the right class or method to call <code>generate_code_from_issue</code>. Assuming you have a <code>GitHubClient</code> and <code>GitClient</code> in your code, you should be using the <code>GitHubClient</code> instance to call the <code>get_approved_issues</code> method and then call the <code>generate_code_from_issue</code> method for each approved issue.</p><p>Update the <code>auto_generate_code</code> method in the <code>gh_auto_code_generation.rb</code> file as follows:</p><pre><div class="bg-black rounded-md mb-4"><div class="flex items-center relative text-gray-200 bg-gray-800 px-4 py-2 text-xs font-sans justify-between rounded-t-md"><span>ruby</span></div><div class="p-4 overflow-y-auto"><code class="!whitespace-pre hljs language-ruby"><span class="hljs-comment"># File: gh_auto_code_generation.rb</span>
+
+<span class="hljs-comment"># ...</span>
+<span class="hljs-keyword">def</span> <span class="hljs-title function_">auto_generate_code</span>(<span class="hljs-params">api_key, your_username, repo_name, issue_number</span>)
+  gh_client = <span class="hljs-title class_">GitHubClient</span>.new(api_key)
+  
+  approved_issues = gh_client.get_approved_issues(<span class="hljs-string">"<span class="hljs-subst">#{your_username}</span>/<span class="hljs-subst">#{repo_name}</span>"</span>)
+  
+  approved_issues.each <span class="hljs-keyword">do</span> |<span class="hljs-params">issue</span>|
+    issue_number = issue[<span class="hljs-symbol">:number</span>]
+    puts <span class="hljs-string">"Generating code for approved issue #<span class="hljs-subst">#{issue_number}</span>..."</span>
+    generate_code_from_issue(your_username, repo_name, issue_number)
+  <span class="hljs-keyword">end</span>
+<span class="hljs-keyword">end</span>
+<span class="hljs-comment"># ...</span>
+</code></div></div></pre><p>This should fix the <code>NoMethodError</code> issue you encountered.</p></div></div></div><div class="flex justify-between"></div></div></div></div></body></html>
