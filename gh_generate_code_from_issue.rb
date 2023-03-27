@@ -175,6 +175,7 @@ Here is the current code structure:
   File.write(commit_summary_file_path, commit_summary)
   puts "Commit summary saved to: #{commit_summary_file_path}"
 
+  return commit_summary_file_path
 end
 
 if __FILE__ == $0

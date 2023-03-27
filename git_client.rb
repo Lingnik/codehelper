@@ -13,13 +13,31 @@ class GitClient
     local_path
   end
   
-  def push_to_remote_repository(local_repo_path, issue_number)
+  def git_commit(repo_path, commit_message_file_path)
+    Dir.chdir(repo_path) do
+      `git add .`
+      `git reset -- #{commit_message_file_path}`
+      `git commit --file=#{commit_message_file_path}`
+      `rm #{commit_message_file_path}`
+    end
+  end
+
+  def git_create_branch(local_repo_path, issue_number)
     Dir.chdir(local_repo_path) do
       system("git checkout -b issue_#{issue_number}")
-      system("git add .")
-      system("git commit -m 'Add generated code for issue ##{issue_number}'")
+    end
+  end
+
+  def git_push(local_repo_path, issue_number)
+    Dir.chdir(local_repo_path) do
       system("git push origin issue_#{issue_number}")
     end
+  end
+
+  def commit_and_push(local_repo_path, issue_number, commit_message_file_path)
+    git_create_branch(issue_number)
+    git_commit(local_repo_path, commit_message_file_path)
+    git_push(local_repo_path, issue_number)
   end
 
 end
