@@ -9,19 +9,25 @@ class OpenAIClient
     @model = model
   end
 
-  def generate_response(prompt, max_tokens = 1000, n = 1, stop = nil, temperature = 0.5, max_retries = 5)
+  def generate_response(messages, max_tokens = 1000, n = 1, stop = nil, temperature = 0.5, max_attempts = 5)
     attempt = 1
     our_max_tokens = 150
 
     while attempt <= max_attempts
-      response = OpenAI::ChatCompletion.create(
-        model: @model,
-        messages: messages,
-        max_tokens: max_tokens,
-        n: n,
-        stop: stop,
-        temperature: temperature,
+      response = @client.chat(parameters: {
+          model: @model,
+          messages: messages,
+          max_tokens: max_tokens,
+          n: n,
+          stop: stop,
+          temperature: temperature,
+        }
       )
+
+      if response["choices"].nil?
+        puts response
+        raise "Error: The 'choices' key is missing or has a nil value in the response."
+      end
 
       content = response["choices"][0]["message"]["content"]
       if ENV['DEBUG'] == 'true'

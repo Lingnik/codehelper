@@ -49,7 +49,7 @@ def generate_code_from_issue(your_username, repo_name, issue_number, local_repo_
   issue_description = issue.body
 
   # Get project files and contents
-  files_and_contents = get_project_files_and_contents(path)
+  files_and_contents = get_project_files_and_contents(local_repo_path)
 
   messages = [
     {
