@@ -9,6 +9,41 @@ class OpenAIClient
     @model = model
   end
 
+  def generate_response(prompt, max_tokens = 1000, n = 1, stop = nil, temperature = 0.5, max_retries = 5)
+    attempt = 1
+    our_max_tokens = 150
+
+    while attempt <= max_attempts
+      response = OpenAI::ChatCompletion.create(
+        model: @model,
+        messages: messages,
+        max_tokens: max_tokens,
+        n: n,
+        stop: stop,
+        temperature: temperature,
+      )
+
+      content = response["choices"][0]["message"]["content"]
+      if ENV['DEBUG'] == 'true'
+        puts "---- Full Response Message Content ----"
+        puts content 
+        puts "----"
+      end
+
+      last_line = content.lines.last.chomp
+      if last_line == "###END###"
+        content = content.chomp("\n###END###")
+        return content
+      else
+        attempt += 1
+        puts "Error: The last line must be '###END###', aborted gpt message detected."
+        sleep(1)
+      end 
+    end
+
+    raise "Unable to obtain a complete or properly-formatted message from chatgpt after #{max_attempts} attempts."
+  end
+
   def generate_code(prompt, max_tokens = 150, n = 1, stop = nil, temperature = 0.5, max_attempts = 5)
     attempt = 1
   
